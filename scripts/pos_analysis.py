@@ -118,27 +118,46 @@ def actual_position(origin, angle):
 
     return centroid, rotated
 
-def remove_anchor_data(anchors, distances_list, removed_index):
-    new_anchors = [a for i, a in enumerate(anchors) if i != removed_index]
+def remove_anchor_data(anchors, distances_list, removed_indices):
+    if removed_indices is None:
+        return anchors, distances_list
+
+    removed_set = set(removed_indices)
+
+    new_anchors = [
+        a for i, a in enumerate(anchors)
+        if i not in removed_set
+    ]
 
     new_distances = []
     for d in distances_list:
-        new_distances.append([val for i, val in enumerate(d) if i != removed_index])
+        new_distances.append([
+            val for i, val in enumerate(d)
+            if i not in removed_set
+        ])
 
     return new_anchors, new_distances
 
-def analyze_test(input_file, plot_title, remove_anchor=None):
+def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=None):
     origin, angle, corners = parse_measurements(f"{DATA_FILE_DIR}{input_file}")
 
     centroid_true, corners_true = actual_position(origin, angle)
 
     corner_labels = ["C1", "C2", "C3", "C4"]
+    if remove_corners is not None:
+        if isinstance(remove_corners, int):
+            remove_corners = [remove_corners]
+        for c in sorted(remove_corners, reverse=True):
+            del corner_labels[c]
     corner_data = [corners[c] for c in corner_labels if c in corners]
 
     anchors = ANCHORS
 
-    if remove_anchor is not None:
-        anchors, corner_data = remove_anchor_data(ANCHORS, corner_data, remove_anchor)
+    if remove_anchors is not None:
+        if isinstance(remove_anchors, int):
+            remove_anchors = [remove_anchors]
+
+        anchors, corner_data = remove_anchor_data(ANCHORS, corner_data, remove_anchors)
 
     corner_dist = []
 
@@ -184,3 +203,4 @@ analyze_test("test_d.txt", "Test D All")
 analyze_test("test_e.txt", "Test E All")
 
 analyze_test("test_d.txt", "Test D Removed 0", 0)
+analyze_test("test_d.txt", "Test D Removed Corners 2 & 3", remove_corners=[2,3])
