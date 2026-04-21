@@ -52,6 +52,51 @@ def parse_measurements(filepath):
 
     return origin, angle, corner_distances
 
+def parse_calibration_single(file):
+    reference = None
+    measured = None
+
+    with open(file, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line:
+                continue
+
+            label, values = line.split(":")
+            nums = [float(v) for v in values.split(",")]
+
+            if label == "Reference":
+                if len(nums) != 10:
+                    raise ValueError("Reference must have 10 values")
+                reference = np.array([num * FEET_TO_CM for num in nums])
+            
+            elif label == "Measured":
+                if len(nums) != 10:
+                    raise ValueError("Measured must have 10 values")
+                measured = nums
+
+            else:
+                raise ValueError(f"Unknown label: {label}")
+
+    if reference is None:
+        raise ValueError("Missing 'Reference' line")
+    if measured is None:
+        raise ValueError("Missing 'Measured' line")
+    
+    m,b = np.polyfit(reference, measured, 1)
+    print(m, b)
+
+    return (m, b)
+
+def parse_calibration(a0_cal_file, a1_cal_file, a2_cal_file):
+    params = []
+    params.append(parse_calibration_single(a0_cal_file))
+    params.append(parse_calibration_single(a1_cal_file))
+    params.append(parse_calibration_single(a2_cal_file))
+
+    return params
+
 def distance(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
@@ -68,9 +113,15 @@ def residuals(pos, anchors, distances):
     return res
 
 
-def estimate_position(anchors, distances, initial_guess=(0, 0)):
+def estimate_position(anchors, distances, initial_guess=(0, 0), cal_params=None):
     anchors = np.array(anchors)
     distances = np.array(distances)
+
+    if cal_params is not None:
+        distances = np.array([
+            (d - b) / m
+            for d, (m, b) in zip(distances, cal_params)
+        ])
 
     result = least_squares(
         residuals,
@@ -138,7 +189,7 @@ def remove_anchor_data(anchors, distances_list, removed_indices):
 
     return new_anchors, new_distances
 
-def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=None):
+def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=None, use_cal=False):
     origin, angle, corners = parse_measurements(f"{DATA_FILE_DIR}{input_file}")
 
     centroid_true, corners_true = actual_position(origin, angle)
@@ -159,11 +210,14 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
 
         anchors, corner_data = remove_anchor_data(ANCHORS, corner_data, remove_anchors)
 
-    corner_dist = []
+    cal_params = None
+    if use_cal:
+        cal_params = parse_calibration(f"{DATA_FILE_DIR}cal_id0.txt", f"{DATA_FILE_DIR}cal_id1.txt", f"{DATA_FILE_DIR}cal_id2.txt")
 
+    corner_dist = []
     for d in corner_data:
         corner_dist.append(
-            estimate_position(anchors, d, initial_guess=(centroid_true[0], centroid_true[1]))
+            estimate_position(anchors, d, initial_guess=(centroid_true[0], centroid_true[1]), cal_params=cal_params)
         )
 
     x_anchors = [point[0] for point in anchors]
@@ -201,6 +255,7 @@ analyze_test("test_b.txt", "Test B All")
 analyze_test("test_c.txt", "Test C All")
 analyze_test("test_d.txt", "Test D All")
 analyze_test("test_e.txt", "Test E All")
+analyze_test("test_b.txt", "Test B All Calibrated", use_cal=True)
 
 analyze_test("test_d.txt", "Test D Removed 0", 0)
 analyze_test("test_d.txt", "Test D Removed Corners 2 & 3", remove_corners=[2,3])
