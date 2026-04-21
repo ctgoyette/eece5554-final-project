@@ -129,20 +129,68 @@ def residuals(pos, anchors, distances):
 
     return res
 
+def robot_residuals(params, anchors, measured_distances):
+    x, y, theta = params
+
+    local_corners = [
+        (0, -CHASSIS_WIDTH_CM/2),   # bottom-left
+        (0,  CHASSIS_WIDTH_CM/2),   # top-left
+        (CHASSIS_LENGTH_CM, -CHASSIS_WIDTH_CM/2),  # bottom-right
+        (CHASSIS_LENGTH_CM,  CHASSIS_WIDTH_CM/2)    # top-right
+    ]
+
+    residuals = []
+
+    for i, (cx, cy) in enumerate(local_corners):
+        rx = cx * np.cos(theta) - cy * np.sin(theta) + x
+        ry = cx * np.sin(theta) + cy * np.cos(theta) + y
+
+        for (ax, ay), d_meas in zip(anchors, measured_distances[i]):
+            d_pred = np.sqrt((rx - ax)**2 + (ry - ay)**2)
+            residuals.append(d_pred - d_meas)
+
+    return residuals
 
 def estimate_position(anchors, distances, initial_guess=(0, 0), cal_params=None):
-    anchors = np.array(anchors)
-    distances = np.array(distances)
+    """
+    anchors: list of (x,y), length = A
+    distances: list of lists -> shape (C corners, A anchors)
+    cal_params: list of (m,b) per anchor OR per sensor channel
+    """
 
+    n_anchors = len(anchors)
+
+    # ---- 1. Validate input shape ----
+    for i, d in enumerate(distances):
+        if len(d) != n_anchors:
+            raise ValueError(
+                f"Corner {i}: expected {n_anchors} distances, got {len(d)}"
+            )
+
+    # ---- 2. Apply calibration safely ----
     if cal_params is not None:
-        distances = np.array([
-            (d - b) / m
-            for d, (m, b) in zip(distances, cal_params)
-        ])
+        if len(cal_params) != n_anchors:
+            raise ValueError(
+                f"Calibration mismatch: {len(cal_params)} cal params but {n_anchors} anchors"
+            )
 
+        calibrated = []
+        for corner_dists in distances:
+            calibrated_corner = [
+                (d - b) / m
+                for d, (m, b) in zip(corner_dists, cal_params)
+            ]
+            calibrated.append(calibrated_corner)
+
+        distances = calibrated
+
+    # ---- 3. DO NOT convert to numpy (important) ----
+    # Keep as pure Python lists to avoid shape corruption
+
+    # ---- 4. Solve ----
     result = least_squares(
-        residuals,
-        x0=np.array(initial_guess),
+        robot_residuals,
+        x0=[initial_guess[0], initial_guess[1], 0],
         args=(anchors, distances)
     )
 
@@ -264,11 +312,12 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     if use_cal:
         cal_params = parse_calibration(f"{DATA_FILE_DIR}cal_id0.txt", f"{DATA_FILE_DIR}cal_id1.txt", f"{DATA_FILE_DIR}cal_id2.txt")
 
-    corner_dist = []
-    for d in corner_data:
-        corner_dist.append(
-            estimate_position(anchors, d, initial_guess=(centroid_true[0], centroid_true[1]), cal_params=cal_params)
-        )
+    x, y, theta = estimate_position(
+        anchors,
+        corner_data,
+        initial_guess=(centroid_true[0], centroid_true[1]),
+        cal_params=cal_params
+    )
 
     x_anchors = [point[0] for point in anchors]
     y_anchors = [point[1] for point in anchors]
@@ -276,18 +325,42 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     x_true_corners = [point[0] for point in corners_true]
     y_true_corners = [point[1] for point in corners_true]
 
-    x_est_corners = [point[0] for point in corner_dist]
-    y_est_corners = [point[1] for point in corner_dist]
-    x_est_centroid = np.mean(x_est_corners)
-    y_est_centroid = np.mean(y_est_corners)
+    local_corners = [
+        (0, -CHASSIS_WIDTH_CM/2),   # bottom-left
+        (0,  CHASSIS_WIDTH_CM/2),   # top-left
+        (CHASSIS_LENGTH_CM, -CHASSIS_WIDTH_CM/2),  # bottom-right
+        (CHASSIS_LENGTH_CM,  CHASSIS_WIDTH_CM/2)    # top-right
+    ]
+
+    x_est_corners = []
+    y_est_corners = []
+
+    for cx, cy in local_corners:
+        rx = cx*np.cos(theta) - cy*np.sin(theta) + x
+        ry = cx*np.sin(theta) + cy*np.cos(theta) + y
+
+        x_est_corners.append(rx)
+        y_est_corners.append(ry)
+        
+    centroid_local = (CHASSIS_LENGTH_CM/2, 0)
+
+    x_est_centroid = (
+        centroid_local[0] * np.cos(theta)
+        - centroid_local[1] * np.sin(theta)
+        + x
+    )
+
+    y_est_centroid = (
+        centroid_local[0] * np.sin(theta)
+        + centroid_local[1] * np.cos(theta)
+        + y
+)
 
     centroid_err = distance((x_est_centroid, y_est_centroid), centroid_true)
-    spread = np.mean([
-        distance((x, y), (x_est_centroid, y_est_centroid))
-        for x, y in zip(x_est_corners, y_est_corners)
-    ])
-    gdop = compute_gdop(anchors, centroid_true)
-    output_stats = f"Error: {centroid_err:.2f} cm | Spread: {spread:.2f} cm | GDOP: {gdop:.2f}"
+    res = robot_residuals([x, y, theta], anchors, corner_data)
+    rmse = np.sqrt(np.mean(np.square(res)))
+    gdop = compute_gdop(anchors, (x_est_centroid, y_est_centroid))
+    output_stats = f"Error: {centroid_err:.2f} cm | RMSE: {rmse:.2f} cm | GDOP: {gdop:.2f}"
     print(output_stats)
 
     plt.scatter(x_true_corners, y_true_corners, color="green", label="Actual Corner Positions")
@@ -345,6 +418,7 @@ analyze_test("test_a.txt", "Test A Removed Anchor 1", 1)
 analyze_test("test_a.txt", "Test A Removed Anchor 2", 2)
 
 analyze_test("test_b.txt", "Test B All")
+analyze_test("test_b.txt", "Test B All (Calibrated)", use_cal=True)
 analyze_test("test_b.txt", "Test B Removed Anchor 0", 0)
 analyze_test("test_b.txt", "Test B Removed Anchor 1", 1)
 analyze_test("test_b.txt", "Test B Removed Anchor 2", 2)
