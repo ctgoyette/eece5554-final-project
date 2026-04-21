@@ -189,6 +189,36 @@ def remove_anchor_data(anchors, distances_list, removed_indices):
 
     return new_anchors, new_distances
 
+def compute_gdop(anchors, est_pos):
+    H = []
+    x, y = est_pos
+
+    for xi, yi in anchors:
+        r = np.sqrt((x - xi)**2 + (y - yi)**2)
+        H.append([(x - xi)/r, (y - yi)/r])
+
+    H = np.array(H)
+    Q = np.linalg.inv(H.T @ H)
+    gdop = np.sqrt(np.trace(Q))
+    return gdop
+
+def allan_deviation(data, tau_values):
+    adev = []
+
+    for tau in tau_values:
+        m = int(tau)
+        if 2*m >= len(data):
+            break
+
+        diffs = [
+            np.mean(data[i+m:i+2*m]) - np.mean(data[i:i+m])
+            for i in range(len(data) - 2*m)
+        ]
+
+        adev.append(np.sqrt(0.5 * np.mean(np.square(diffs))))
+
+    return np.array(adev)
+
 def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=None, use_cal=False):
     origin, angle, corners = parse_measurements(f"{DATA_FILE_DIR}{input_file}")
 
@@ -232,7 +262,13 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     y_est_centroid = np.mean(y_est_corners)
 
     centroid_err = distance((x_est_centroid, y_est_centroid), centroid_true)
-    print(f"{plot_title} Centroid Error: {centroid_err} cm")
+    spread = np.mean([
+        distance((x, y), (x_est_centroid, y_est_centroid))
+        for x, y in zip(x_est_corners, y_est_corners)
+    ])
+    gdop = compute_gdop(anchors, centroid_true)
+    output_stats = f"Error: {centroid_err:.2f} cm | Spread: {spread:.2f} cm | GDOP: {gdop:.2f}"
+    print(output_stats)
 
     plt.scatter(x_true_corners, y_true_corners, color="green", label="Actual Corner Positions")
     plt.scatter(centroid_true[0], centroid_true[1], color='purple', label="Actual Centroid Position")
@@ -244,18 +280,33 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     plt.xlabel("X (cm)")
     plt.ylabel("Y (cm)")
     plt.legend()
-    plt.title(f"{plot_title}, Error={centroid_err:.3f}")
+    plt.title(f"{plot_title}\n{output_stats}")
     plt.grid(True)
     plt.axis('equal')
     plt.savefig(f"{OUTPUT_FILE_DIR}{plot_title}.png")
     plt.close()
 
-analyze_test("test_a.txt", "Test A All")
-analyze_test("test_b.txt", "Test B All")
-analyze_test("test_c.txt", "Test C All")
-analyze_test("test_d.txt", "Test D All")
-analyze_test("test_e.txt", "Test E All")
-analyze_test("test_b.txt", "Test B All Calibrated", use_cal=True)
+def analyze_time_series(data, label):
+    taus = np.logspace(0, 3, 50)
+    adev = allan_deviation(data, taus)
 
-analyze_test("test_d.txt", "Test D Removed 0", 0)
-analyze_test("test_d.txt", "Test D Removed Corners 2 & 3", remove_corners=[2,3])
+    plt.loglog(taus[:len(adev)], adev, label=label)
+
+analyze_test("test_a.txt", "Test A All")
+analyze_test("test_a.txt", "Test A Removed Anchor 0", 0)
+analyze_test("test_a.txt", "Test A Removed Anchor 1", 1)
+analyze_test("test_a.txt", "Test A Removed Anchor 2", 2)
+
+analyze_test("test_b.txt", "Test B All")
+analyze_test("test_b.txt", "Test B Removed Anchor 0", 0)
+analyze_test("test_b.txt", "Test B Removed Anchor 1", 1)
+analyze_test("test_b.txt", "Test B Removed Anchor 2", 2)
+
+analyze_test("test_c.txt", "Test C All")
+analyze_test("test_c.txt", "Test C Removed Anchor 0", 0)
+
+analyze_test("test_d.txt", "Test D All")
+analyze_test("test_d.txt", "Test D Removed Anchor 0", 0)
+
+analyze_test("test_e.txt", "Test E All")
+analyze_test("test_e.txt", "Test E Removed Anchor 0", 0)
