@@ -52,6 +52,11 @@ def parse_measurements(filepath):
 
     return origin, angle, corner_distances
 
+def distance(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
 def residuals(pos, anchors, distances):
     x, y = pos
     res = []
@@ -113,24 +118,37 @@ def actual_position(origin, angle):
 
     return centroid, rotated
 
-def analyze_test(input_file, plot_title):
+def remove_anchor_data(anchors, distances_list, removed_index):
+    new_anchors = [a for i, a in enumerate(anchors) if i != removed_index]
+
+    new_distances = []
+    for d in distances_list:
+        new_distances.append([val for i, val in enumerate(d) if i != removed_index])
+
+    return new_anchors, new_distances
+
+def analyze_test(input_file, plot_title, remove_anchor=None):
     origin, angle, corners = parse_measurements(f"{DATA_FILE_DIR}{input_file}")
 
     centroid_true, corners_true = actual_position(origin, angle)
 
+    corner_labels = ["C1", "C2", "C3", "C4"]
+    corner_data = [corners[c] for c in corner_labels if c in corners]
+
+    anchors = ANCHORS
+
+    if remove_anchor is not None:
+        anchors, corner_data = remove_anchor_data(ANCHORS, corner_data, remove_anchor)
+
     corner_dist = []
 
-    if ("C1" in corners):
-        corner_dist.append(estimate_position(ANCHORS, corners["C1"], initial_guess=(centroid_true[0], centroid_true[1])))
-    if ("C2" in corners):
-        corner_dist.append(estimate_position(ANCHORS, corners["C2"], initial_guess=(centroid_true[0], centroid_true[1])))
-    if ("C3" in corners):
-        corner_dist.append(estimate_position(ANCHORS, corners["C3"], initial_guess=(centroid_true[0], centroid_true[1])))
-    if ("C4" in corners):
-        corner_dist.append(estimate_position(ANCHORS, corners["C4"], initial_guess=(centroid_true[0], centroid_true[1])))
+    for d in corner_data:
+        corner_dist.append(
+            estimate_position(anchors, d, initial_guess=(centroid_true[0], centroid_true[1]))
+        )
 
-    x_anchors = [point[0] for point in ANCHORS]
-    y_anchors = [point[1] for point in ANCHORS]
+    x_anchors = [point[0] for point in anchors]
+    y_anchors = [point[1] for point in anchors]
 
     x_true_corners = [point[0] for point in corners_true]
     y_true_corners = [point[1] for point in corners_true]
@@ -139,6 +157,9 @@ def analyze_test(input_file, plot_title):
     y_est_corners = [point[1] for point in corner_dist]
     x_est_centroid = np.mean(x_est_corners)
     y_est_centroid = np.mean(y_est_corners)
+
+    centroid_err = distance((x_est_centroid, y_est_centroid), centroid_true)
+    print(f"{plot_title} Centroid Error: {centroid_err} cm")
 
     plt.scatter(x_true_corners, y_true_corners, color="green", label="Actual Corner Positions")
     plt.scatter(centroid_true[0], centroid_true[1], color='purple', label="Actual Centroid Position")
@@ -156,8 +177,10 @@ def analyze_test(input_file, plot_title):
     plt.savefig(f"{OUTPUT_FILE_DIR}{plot_title}.png")
     plt.close()
 
-analyze_test("test_a.txt", "Test A")
-analyze_test("test_b.txt", "Test B")
-analyze_test("test_c.txt", "Test C")
-analyze_test("test_d.txt", "Test D")
-analyze_test("test_e.txt", "Test E")
+analyze_test("test_a.txt", "Test A All")
+analyze_test("test_b.txt", "Test B All")
+analyze_test("test_c.txt", "Test C All")
+analyze_test("test_d.txt", "Test D All")
+analyze_test("test_e.txt", "Test E All")
+
+analyze_test("test_d.txt", "Test D Removed 0", 0)
