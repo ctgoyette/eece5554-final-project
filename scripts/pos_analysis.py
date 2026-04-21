@@ -244,7 +244,7 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     plt.xlabel("X (cm)")
     plt.ylabel("Y (cm)")
     plt.legend()
-    plt.title(plot_title)
+    plt.title(f"{plot_title}, Error={centroid_err:.3f}")
     plt.grid(True)
     plt.axis('equal')
     plt.savefig(f"{OUTPUT_FILE_DIR}{plot_title}.png")
