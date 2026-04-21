@@ -97,6 +97,23 @@ def parse_calibration(a0_cal_file, a1_cal_file, a2_cal_file):
 
     return params
 
+def load_time_series(filepath):
+    data = []
+
+    with open(filepath, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line or line.startswith("#!"):
+                continue
+
+            try:
+                data.append(float(line))
+            except ValueError:
+                continue
+
+    return np.array(data)
+
 def distance(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
@@ -202,22 +219,25 @@ def compute_gdop(anchors, est_pos):
     gdop = np.sqrt(np.trace(Q))
     return gdop
 
-def allan_deviation(data, tau_values):
+def allan_deviation(data, max_m=None):
+    N = len(data)
+    if max_m is None:
+        max_m = N // 10
+
+    taus = []
     adev = []
 
-    for tau in tau_values:
-        m = int(tau)
-        if 2*m >= len(data):
-            break
+    for m in np.logspace(0, np.log10(max_m), 50).astype(int):
+        if m < 1 or 2*m >= N:
+            continue
 
-        diffs = [
-            np.mean(data[i+m:i+2*m]) - np.mean(data[i:i+m])
-            for i in range(len(data) - 2*m)
-        ]
+        diffs = data[2*m:] - 2*data[m:-m] + data[:-2*m]
+        sigma2 = np.mean(diffs**2) / (2 * (m**2))
 
-        adev.append(np.sqrt(0.5 * np.mean(np.square(diffs))))
+        taus.append(m)
+        adev.append(np.sqrt(sigma2))
 
-    return np.array(adev)
+    return np.array(taus), np.array(adev)
 
 def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=None, use_cal=False):
     origin, angle, corners = parse_measurements(f"{DATA_FILE_DIR}{input_file}")
@@ -286,12 +306,39 @@ def analyze_test(input_file, plot_title, remove_anchors=None, remove_corners=Non
     plt.savefig(f"{OUTPUT_FILE_DIR}{plot_title}.png")
     plt.close()
 
-def analyze_time_series(data, label):
-    taus = np.logspace(0, 3, 50)
-    adev = allan_deviation(data, taus)
+def analyze_time_series(los_file, nlos_file, plot_title):
 
-    plt.loglog(taus[:len(adev)], adev, label=label)
+    TRUE_DIST_CM = 5 * 12 * 2.54  # 152.4 cm
+    d_los = load_time_series(los_file)
+    d_nlos = load_time_series(nlos_file)
 
+    err_los = d_los - TRUE_DIST_CM
+    err_nlos = d_nlos - TRUE_DIST_CM
+
+    t1, a1 = allan_deviation(err_los)
+    t2, a2 = allan_deviation(err_nlos)
+
+    min_idx1 = np.argmin(a1)
+    min_idx2 = np.argmin(a2)
+
+    print("Best Allan deviation (LOS):", a1[min_idx1], "cm")
+    print("Optimal averaging window (LOS):", t1[min_idx1], "samples")
+
+    print("Best Allan deviation (NLOS):", a2[min_idx2], "cm")
+    print("Optimal averaging window (NLOS):", t2[min_idx2], "samples")
+
+    plt.loglog(t1, a1, label="LOS")
+    plt.loglog(t2, a2, label="NLOS")
+
+    plt.xlabel("Averaging Time (samples)")
+    plt.ylabel("Allan Deviation (cm)")
+    plt.legend()
+    plt.title("Allan Deviation - UWB Distance Noise")
+    plt.grid(True, which="both")
+    plt.savefig(f"{OUTPUT_FILE_DIR}{plot_title}.png")
+    plt.close()
+
+print("########### Stationary Stats ###########")
 analyze_test("test_a.txt", "Test A All")
 analyze_test("test_a.txt", "Test A Removed Anchor 0", 0)
 analyze_test("test_a.txt", "Test A Removed Anchor 1", 1)
@@ -310,3 +357,6 @@ analyze_test("test_d.txt", "Test D Removed Anchor 0", 0)
 
 analyze_test("test_e.txt", "Test E All")
 analyze_test("test_e.txt", "Test E Removed Anchor 0", 0)
+
+print("\n########### Allan Deviation ###########")
+analyze_time_series("../data/raw/5' Sounding/Allan_Variance_Unobstructed.csv", "../data/raw/5' Sounding/Allan_Variance_Obstructed.csv", "Allan Variance")
